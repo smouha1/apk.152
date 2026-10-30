@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Executive Slate & Warm Stone Light Mode (Calm, Formal + Talabat Orange #FF5A00) -->
+    <color name="bg">#CEC6BC</color>
+    <color name="scene_scrim">#40F7F4EF</color>
+    <color name="surface">#CCFAF8F5</color>
+    <color name="surface_strong">#E6FCFBF9</color>
+    <color name="surface_alt">#99F4F1EC</color>
+    <color name="primary">#FF5A00</color>
+    <color name="primary_dark">#E04800</color>
+    <color name="primary_soft">#1FFF5A00</color>
+    <color name="text">#1E1B18</color>
+    <color name="muted">#5C554E</color>
+    <color name="success">#15803D</color>
+    <color name="success_soft">#DCFCE7</color>
+    <color name="success_border">#BBF7D0</color>
+    <color name="danger">#B91C1C</color>
+    <color name="danger_soft">#FEE2E2</color>
+    <color name="warning">#B45309</color>
+    <color name="warning_soft">#FEF3C7</color>
+    <color name="border">#99FFFFFF</color>
+    <color name="border_subtle">#59FFFFFF</color>
+    <color name="nav_bg">#F2F8F6F2</color>
+</resources>

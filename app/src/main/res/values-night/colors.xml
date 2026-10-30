@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Executive Smoked Obsidian Dark Mode (Calm, Formal + Talabat Orange #FF7A2F) -->
+    <color name="bg">#121316</color>
+    <color name="scene_scrim">#B8101114</color>
+    <color name="surface">#CC181A1F</color>
+    <color name="surface_strong">#E61E2026</color>
+    <color name="surface_alt">#24FFFFFF</color>
+    <color name="primary">#FF7A2F</color>
+    <color name="primary_dark">#FF5A00</color>
+    <color name="primary_soft">#2EFF5A00</color>
+    <color name="text">#F3F4F6</color>
+    <color name="muted">#9CA3AF</color>
+    <color name="success">#86EFAC</color>
+    <color name="success_soft">#14532D</color>
+    <color name="success_border">#166534</color>
+    <color name="danger">#FCA5A5</color>
+    <color name="danger_soft">#7F1D1D</color>
+    <color name="warning">#FCD34D</color>
+    <color name="warning_soft">#78350F</color>
+    <color name="border">#29FFFFFF</color>
+    <color name="border_subtle">#1AFFFFFF</color>
+    <color name="nav_bg">#F215171B</color>
+</resources>
