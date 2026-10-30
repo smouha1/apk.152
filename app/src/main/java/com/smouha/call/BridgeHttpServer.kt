@@ -6,14 +6,14 @@ import org.json.JSONObject
 import java.io.IOException
 
 /**
- * LAN HTTP API for Smouha Papper extension (v1.5.2).
+ * LAN HTTP API for Smouha Papper extension (v1.5.3).
  */
 class BridgeHttpServer(
     private val appContext: Context,
     private val prefs: Prefs,
     private val pairing: PairingManager,
     port: Int = Prefs.PORT
-) : NanoHTTPD(port) {
+) : NanoHTTPD("0.0.0.0", port) {
 
     @Throws(IOException::class)
     override fun start() {
@@ -24,8 +24,9 @@ class BridgeHttpServer(
         val cors = mapOf(
             "Access-Control-Allow-Origin" to "*",
             "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers" to "Content-Type, Authorization",
+            "Access-Control-Allow-Headers" to "Content-Type, Authorization, Accept",
             "Access-Control-Allow-Private-Network" to "true",
+            "Cache-Control" to "no-store",
             "Connection" to "keep-alive"
         )
 
@@ -48,7 +49,7 @@ class BridgeHttpServer(
                         Response.Status.OK,
                         JSONObject()
                             .put("ok", true)
-                            .put("version", "1.5.2")
+                            .put("version", "1.5.3")
                             .put("deviceId", prefs.deviceId)
                             .put("deviceName", prefs.deviceName)
                             .put("brand", Prefs.BRAND_TAG)
@@ -151,10 +152,11 @@ class BridgeHttpServer(
                     val remSec = (pairing.hostPairRemainingMs() / 1000L).toInt()
                     val counts = ActivityLog.todayCounts(appContext)
                     val ip = NetworkUtils.localIpv4() ?: ""
+                    val offer = pairing.currentOffer()
                     val infoObj = JSONObject()
                         .put("ok", true)
                         .put("app", "SmouhaCall")
-                        .put("version", "1.5.2")
+                        .put("version", "1.5.3")
                         .put("deviceId", prefs.deviceId)
                         .put("deviceName", prefs.deviceName)
                         .put("brand", Prefs.BRAND_TAG)
@@ -162,15 +164,13 @@ class BridgeHttpServer(
                         .put("sessions", prefs.sessionTokens().size)
                         .put("pairWindowOpen", windowOpen)
                         .put("pairRemainingSec", remSec)
+                        .put("pairOfferSecret", offer.secret)
                         .put("callsToday", counts.calls)
                         .put("waToday", counts.whatsapp)
                         .put("port", Prefs.PORT)
                         .put("ip", ip)
                         .put("quickCode", NetworkUtils.quickCode(ip) ?: "")
                         .put("ts", System.currentTimeMillis())
-                    if (windowOpen) {
-                        infoObj.put("pairOfferSecret", pairing.currentOffer().secret)
-                    }
                     json(Response.Status.OK, infoObj, cors)
                 }
                 path == "/v1/activity" && session.method == Method.GET -> {

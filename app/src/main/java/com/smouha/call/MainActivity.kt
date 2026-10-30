@@ -126,10 +126,8 @@ class MainActivity : AppCompatActivity() {
             ensureCameraAndScan()
         }
         binding.btnAcceptPcPair.setOnClickListener {
-            if (!BridgeState.running) {
-                startBridgeService()
-            }
-            pairing.enableHostPairWindow(120_000L)
+            startBridgeService()
+            pairing.enableHostPairWindow(300_000L)
             renderPairing()
             startPairCountdownTicker()
             Toast.makeText(this, getString(R.string.accept_pc_pair_toast), Toast.LENGTH_LONG).show()
@@ -179,9 +177,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (prefs.autoStart && !BridgeState.running) {
-            startBridgeService()
-        }
+        // Always start HTTP server immediately on launch so PC can connect right away!
+        startBridgeService()
+        pairing.enableHostPairWindow(300_000L)
         showPanel(0)
         refreshUi()
         renderPairing()
@@ -198,12 +196,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateFastPairBadge() {
         val open = pairing.hostPairWindowOpen()
-        val qc = NetworkUtils.quickCode() ?: "—"
+        val ip = NetworkUtils.localIpv4() ?: "—"
+        val qc = NetworkUtils.quickCode(ip) ?: "—"
         if (open) {
             val remSec = (pairing.hostPairRemainingMs() / 1000L).toInt()
             binding.pairWindowBadge.visibility = View.VISIBLE
-            binding.pairWindowBadge.text = "⚡ AUTO-PAIR · ${remSec}s"
-            binding.pairHint.text = getString(R.string.accept_pc_pair_hint, qc)
+            binding.pairWindowBadge.text = "⚡ READY · ${remSec}s"
+            binding.pairHint.text =
+                "⚡ Ready to Pair! Phone IP: $ip (Quick Code: $qc)
+Click «⚡ Auto-Pair Phone» on PC (or type $qc in the PC IP box for instant 0.1s link)!"
         } else {
             binding.pairWindowBadge.visibility = View.GONE
             val paired = prefs.hasPairedSession()
@@ -224,9 +225,7 @@ class MainActivity : AppCompatActivity() {
                 renderActivity()
             }
         }
-        if (pairing.hostPairWindowOpen()) {
-            startPairCountdownTicker()
-        }
+        startPairCountdownTicker()
     }
 
     override fun onStop() {
@@ -238,6 +237,9 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (prefs.autoStart && !BridgeState.running) {
+            BridgeState.ensureServerRunning(applicationContext)
+        }
         refreshUi()
         renderPairing()
         if (binding.panelActivity.visibility == View.VISIBLE) renderActivity()
@@ -251,25 +253,34 @@ class MainActivity : AppCompatActivity() {
 
     private fun toggleBridge() {
         if (BridgeState.running) {
+            BridgeState.stopServer()
             val i = Intent(this, CallBridgeService::class.java).apply {
                 action = CallBridgeService.ACTION_STOP
             }
-            startService(i)
-            binding.root.postDelayed({ refreshUi() }, 300)
+            try {
+                startService(i)
+            } catch (_: Exception) {
+            }
+            refreshUi()
         } else {
             startBridgeService()
-            binding.root.postDelayed({ refreshUi() }, 300)
+            refreshUi()
         }
     }
 
     private fun startBridgeService() {
+        // Start HTTP server synchronously in process first so port 8765 is open within 5ms!
+        BridgeState.ensureServerRunning(applicationContext)
         val i = Intent(this, CallBridgeService::class.java).apply {
             action = CallBridgeService.ACTION_START
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(i)
-        } else {
-            startService(i)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(i)
+            } else {
+                startService(i)
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -335,7 +346,8 @@ class MainActivity : AppCompatActivity() {
             }
             val st = if (last.ok) "OK" else "FAIL"
             binding.lastActionText.text =
-                "$kind · ${last.phone} · $st (${fmt.format(Date(last.ts))})\n${last.detail}"
+                "$kind · ${last.phone} · $st (${fmt.format(Date(last.ts))})
+${last.detail}"
             binding.lastActionText.setTextColor(
                 ContextCompat.getColor(this, if (last.ok) R.color.success else R.color.danger)
             )
@@ -353,7 +365,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startQrScan() {
-        if (!BridgeState.running) startBridgeService()
+        startBridgeService()
         val options = ScanOptions().apply {
             setDesiredBarcodeFormats(ScanOptions.QR_CODE)
             setPrompt(getString(R.string.scan_pc_qr_hint))
@@ -366,10 +378,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleScannedPayload(raw: String) {
         val text = raw.trim()
+        val ip = NetworkUtils.localIpv4() ?: "—"
+        val qc = NetworkUtils.quickCode(ip) ?: ip
         try {
             val json = JSONObject(text)
             val secret = json.optString("secret", "").trim()
-            if (secret.length < 6) {
+            if (secret.length < 4) {
                 Toast.makeText(this, getString(R.string.scan_bad), Toast.LENGTH_LONG).show()
                 return
             }
@@ -377,15 +391,24 @@ class MainActivity : AppCompatActivity() {
             pairing.acceptPcOffer(secret, exp)
             renderPairing()
             startPairCountdownTicker()
-            Toast.makeText(this, getString(R.string.scan_ok), Toast.LENGTH_LONG).show()
-            ActivityLog.add(this, "pair", "-", true, "QR scanned — waiting for PC auto-connect")
+            Toast.makeText(
+                this,
+                "✓ QR Scanned! Phone IP: $ip (Quick Code: $qc) — PC connecting…",
+                Toast.LENGTH_LONG
+            ).show()
+            ActivityLog.add(this, "pair", qc, true, "QR scanned (IP $ip · Code $qc) — ready for PC")
             refreshUi()
         } catch (_: Exception) {
-            if (text.length in 6..64 && text.all { it.isLetterOrDigit() }) {
+            if (text.length in 4..64 && text.all { it.isLetterOrDigit() }) {
                 pairing.acceptPcOffer(text, 0L)
                 renderPairing()
                 startPairCountdownTicker()
-                Toast.makeText(this, getString(R.string.scan_ok), Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this,
+                    "✓ QR Scanned! Phone IP: $ip (Quick Code: $qc) — PC connecting…",
+                    Toast.LENGTH_LONG
+                ).show()
+                refreshUi()
             } else {
                 Toast.makeText(this, getString(R.string.scan_bad), Toast.LENGTH_LONG).show()
             }
@@ -398,7 +421,7 @@ class MainActivity : AppCompatActivity() {
             val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
             for (x in 0 until sizePx) {
                 for (y in 0 until sizePx) {
-                    bmp.setPixel(x, y, if (matrix[x, y]) Color.parseColor("#181512") else Color.WHITE)
+                    bmp.setPixel(x, y, if (matrix[x, y]) Color.parseColor("#0F172A") else Color.WHITE)
                 }
             }
             bmp
@@ -412,7 +435,7 @@ class MainActivity : AppCompatActivity() {
         val payload = pairing.buildPayloadJson(ip)
         binding.payloadText.text = payload
         binding.brandAlways.text = Prefs.BRAND_TAG
-        binding.brandTag.text = "${Prefs.BRAND_TAG} · v1.5.2"
+        binding.brandTag.text = "${Prefs.BRAND_TAG} · v1.5.3"
 
         updateFastPairBadge()
 
@@ -510,6 +533,10 @@ class MainActivity : AppCompatActivity() {
         val ip = NetworkUtils.localIpv4() ?: "—"
         val qc = NetworkUtils.quickCode(ip) ?: "—"
         binding.settingsMeta.text =
-            "Version: 1.5.2 (Executive Edition)\nDevice ID: ${prefs.deviceId}\nIP: $ip (Quick Code: $qc)\nPort: ${Prefs.PORT}\nPaired PCs: ${prefs.sessionTokens().size}"
+            "Version: 1.5.3 (Executive Edition)
+Device ID: ${prefs.deviceId}
+IP: $ip (Quick Code: $qc)
+Port: ${Prefs.PORT}
+Paired PCs: ${prefs.sessionTokens().size}"
     }
 }

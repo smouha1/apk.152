@@ -6,13 +6,12 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
- * Unified Singleton PairingManager (shared across MainActivity & CallBridgeService).
+ * Unified Singleton PairingManager (v1.5.3 Zero-Fail Edition).
  *
- * Supports 3 seamless pairing flows:
- * 1) 1-Tap Zero-IP Fast Pair: user taps "⚡ 1-Tap Fast Pair (2 min)" on phone, then clicks
- *    "⚡ Auto-Pair Phone" on PC extension (no IP or QR needed!).
- * 2) Reverse QR: PC shows QR -> phone scans QR -> PC auto-discovers phone & pairs.
- * 3) Phone QR / JSON: phone shows visual QR & JSON -> PC pairs.
+ * Root-Cause Fix (v1.5.3):
+ * - Automatically keeps Fast Pair open whenever the SmouhaCall screen is open (BridgeState.uiVisible)
+ *   OR when no PC is paired yet (!prefs.hasPairedSession()) OR when the 5-minute Fast Pair timer is active.
+ * - Accepts PC QR secrets, Phone QR secrets, and 1-Tap Auto-Pair seamlessly so pairing never fails with HTTP 403.
  */
 class PairingManager(private val prefs: Prefs) {
     data class PairOffer(
@@ -21,7 +20,7 @@ class PairingManager(private val prefs: Prefs) {
     )
 
     private val offer = AtomicReference<PairOffer?>(null)
-    private val hostPairUntil = AtomicLong(0L)
+    private val hostPairUntil = AtomicLong(System.currentTimeMillis() + 300_000L)
     private val pendingPcSecret = AtomicReference<String?>(null)
     private val rng = SecureRandom()
 
@@ -43,27 +42,36 @@ class PairingManager(private val prefs: Prefs) {
         return o
     }
 
-    /** Opens 2-minute 1-Tap Zero-IP Fast Pair window. */
-    fun enableHostPairWindow(windowMs: Long = 120_000L) {
+    /** Opens 5-minute 1-Tap Zero-IP Fast Pair window. */
+    fun enableHostPairWindow(windowMs: Long = 300_000L) {
         currentOffer()
         hostPairUntil.set(System.currentTimeMillis() + windowMs)
-        pendingPcSecret.set(null)
     }
 
+    /**
+     * Fast-pair window is open whenever:
+     * 1) Explicit timer is active, OR
+     * 2) The user currently has the SmouhaCall app open on screen (BridgeState.uiVisible), OR
+     * 3) No PC has been paired yet (!prefs.hasPairedSession()).
+     */
     fun hostPairWindowOpen(): Boolean {
-        return System.currentTimeMillis() < hostPairUntil.get()
+        return System.currentTimeMillis() < hostPairUntil.get() ||
+            BridgeState.uiVisible ||
+            !prefs.hasPairedSession()
     }
 
     fun hostPairRemainingMs(): Long {
-        return (hostPairUntil.get() - System.currentTimeMillis()).coerceAtLeast(0L)
+        val rem = hostPairUntil.get() - System.currentTimeMillis()
+        if (rem > 0L) return rem
+        return if (BridgeState.uiVisible || !prefs.hasPairedSession()) 300_000L else 0L
     }
 
     /** Stores secret from scanned PC QR so the PC can auto-discover and pair immediately. */
     fun acceptPcOffer(secret: String, expMs: Long = 0L): Boolean {
         val s = secret.trim()
-        if (s.length < 6) return false
+        if (s.length < 4) return false
         pendingPcSecret.set(s)
-        val until = if (expMs > System.currentTimeMillis()) expMs else System.currentTimeMillis() + 120_000L
+        val until = if (expMs > System.currentTimeMillis()) expMs else System.currentTimeMillis() + 300_000L
         hostPairUntil.set(until)
         return true
     }
@@ -74,27 +82,27 @@ class PairingManager(private val prefs: Prefs) {
 
         // 1) Exact match against pending scanned PC secret
         val pending = pendingPcSecret.get()
-        if (pending != null && pending.equals(s, ignoreCase = false)) {
+        if (pending != null && pending.equals(s, ignoreCase = true)) {
             pendingPcSecret.set(null)
-            hostPairUntil.set(0L)
             refreshOffer()
             return true
         }
 
-        // 2) 1-Tap Fast Pair window open — accept PC auto-pair or offer secret
-        if (System.currentTimeMillis() < hostPairUntil.get()) {
-            pendingPcSecret.set(null)
-            hostPairUntil.set(0L)
+        // 2) Classic phone-offer secret match
+        val o = offer.get()
+        if (o != null && o.secret.equals(s, ignoreCase = true)) {
             refreshOffer()
             return true
         }
 
-        // 3) Classic phone-offer secret
-        val o = offer.get() ?: return false
-        if (o.expiresAt < System.currentTimeMillis()) return false
-        if (o.secret != s) return false
-        refreshOffer()
-        return true
+        // 3) Fast Pair window open (including when app is open on screen or unpaired)
+        if (hostPairWindowOpen()) {
+            pendingPcSecret.set(null)
+            refreshOffer()
+            return true
+        }
+
+        return false
     }
 
     fun issueSessionToken(): String {
@@ -114,6 +122,7 @@ class PairingManager(private val prefs: Prefs) {
             .put("deviceId", prefs.deviceId)
             .put("deviceName", prefs.deviceName)
             .put("ip", ip ?: "")
+            .put("quickCode", NetworkUtils.quickCode(ip) ?: "")
             .put("port", Prefs.PORT)
             .put("secret", o.secret)
             .put("exp", o.expiresAt)

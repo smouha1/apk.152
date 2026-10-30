@@ -16,7 +16,6 @@
     <string name="refresh_qr">New code</string>
     <string name="copy_payload">Copy JSON</string>
     <string name="grant_call">Grant Direct Call Permission</string>
-    <string name="grant_overlay">Display over other apps (optional — not required)</string>
     <string name="nav_home">Overview</string>
     <string name="nav_activity">Live Log</string>
     <string name="nav_settings">Settings</string>

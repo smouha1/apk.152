@@ -14,69 +14,50 @@ import android.os.Looper
 import androidx.core.app.NotificationCompat
 
 class CallBridgeService : Service() {
-    private var server: BridgeHttpServer? = null
-    private lateinit var prefs: Prefs
-    private lateinit var pairing: PairingManager
     private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate() {
         super.onCreate()
-        prefs = BridgeState.getPrefs(this)
-        pairing = BridgeState.getPairing(this)
+        val pairing = BridgeState.getPairing(this)
         pairing.currentOffer()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                stopBridge()
-                stopForeground(STOP_FOREGROUND_REMOVE)
+                BridgeState.stopServer()
+                releaseWifiLock()
+                try {
+                    stopForeground(STOP_FOREGROUND_REMOVE)
+                } catch (_: Exception) {
+                }
                 stopSelf()
                 return START_NOT_STICKY
             }
-            else -> startBridge()
+            else -> {
+                promoteForegroundSafely(buildNotification())
+                val ok = BridgeState.ensureServerRunning(applicationContext)
+                if (ok) {
+                    acquireWifiLock()
+                }
+            }
         }
         return START_STICKY
     }
 
-    private fun promoteForeground(notif: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIF_ID, notif)
-        }
-    }
-
-    private fun startBridge() {
-        if (server != null) {
-            promoteForeground(buildNotification())
-            BridgeState.notifyUi()
-            return
-        }
+    private fun promoteForegroundSafely(notif: Notification) {
         try {
-            val s = BridgeHttpServer(applicationContext, prefs, pairing, Prefs.PORT)
-            s.start()
-            server = s
-            BridgeState.running = true
-            promoteForeground(buildNotification())
-            acquireWifiLock()
-            BridgeState.notifyUi()
-        } catch (e: Exception) {
-            BridgeState.running = false
-            BridgeState.notifyUi()
-            stopSelf()
-        }
-    }
-
-    private fun stopBridge() {
-        try {
-            server?.stop()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
         } catch (_: Exception) {
+            try {
+                startForeground(NOTIF_ID, notif)
+            } catch (_: Exception) {
+            }
         }
-        server = null
-        BridgeState.running = false
-        releaseWifiLock()
-        BridgeState.notifyUi()
     }
 
     private fun acquireWifiLock() {
@@ -124,7 +105,7 @@ class CallBridgeService : Service() {
     }
 
     override fun onDestroy() {
-        stopBridge()
+        releaseWifiLock()
         super.onDestroy()
     }
 
@@ -145,6 +126,7 @@ object BridgeState {
 
     @Volatile private var prefsInstance: Prefs? = null
     @Volatile private var pairingInstance: PairingManager? = null
+    @Volatile private var httpServer: BridgeHttpServer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     fun getPrefs(ctx: Context): Prefs {
@@ -157,6 +139,59 @@ object BridgeState {
         return pairingInstance ?: synchronized(this) {
             pairingInstance ?: PairingManager(getPrefs(ctx)).also { pairingInstance = it }
         }
+    }
+
+    /**
+     * Guarantees BridgeHttpServer is listening on 0.0.0.0:8765 even if Android delays or restricts
+     * ForegroundService promotion.
+     */
+    @Synchronized
+    fun ensureServerRunning(ctx: Context): Boolean {
+        val appCtx = ctx.applicationContext
+        val existing = httpServer
+        if (existing != null && existing.isAlive) {
+            running = true
+            notifyUi()
+            return true
+        }
+        try {
+            existing?.stop()
+        } catch (_: Exception) {
+        }
+        httpServer = null
+        return try {
+            val s = BridgeHttpServer(appCtx, getPrefs(appCtx), getPairing(appCtx), Prefs.PORT)
+            s.start()
+            httpServer = s
+            running = true
+            notifyUi()
+            true
+        } catch (_: Exception) {
+            try {
+                Thread.sleep(180)
+                val s2 = BridgeHttpServer(appCtx, getPrefs(appCtx), getPairing(appCtx), Prefs.PORT)
+                s2.start()
+                httpServer = s2
+                running = true
+                notifyUi()
+                true
+            } catch (_: Exception) {
+                running = false
+                notifyUi()
+                false
+            }
+        }
+    }
+
+    @Synchronized
+    fun stopServer() {
+        try {
+            httpServer?.stop()
+        } catch (_: Exception) {
+        }
+        httpServer = null
+        running = false
+        notifyUi()
     }
 
     fun notifyUi() {
